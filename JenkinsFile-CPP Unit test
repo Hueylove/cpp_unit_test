@@ -1,0 +1,87 @@
+timestamps 
+{
+	/* Timeout if build take more than 30 minutes. This depend on previous builds and it is better to check how much time is enough before using it.*/
+	properties([[$class: 'EnvInjectJobProperty', info: [loadFilesFromMaster: false, propertiesContent: '''VisualStudioVersion=15.0
+	ExternalCompilerOptions=/DOFFICIAL_BUILD=2''', secureGroovyScript: [classpath: [], oldScript: '', sandbox: false, script: '']], keepBuildVariables: true, keepJenkinsSystemVariables: true, on: true], pipelineTriggers([cron('H 0 * * *')])])
+ 	timeout(time: 5, unit: 'MINUTES')
+	{
+	
+		node () 
+		{
+			def build_ok = true
+			try 
+				{
+					/* Check out stage is our first stage. This is where the rest of the source is check out. It will take the Repository URL from configuration that is on Jenkins.*/
+					stage ('SVN checkout') 
+					{	
+						checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: 'svn', depthOption: 'infinity', ignoreExternalsOption: true, local: '.', remote: 'https://helios.triomotion.com/svn/TrioPC/Dev/Development']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+					}
+					stage('Clean VPU')
+					{
+					    bat '''cd %WORKSPACE%
+                        "D:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Professional\\MSBuild\\15.0\\Bin\\MSBuild.exe" .\\CalculatorTest.sln  /t:Clean /p:Configuration="Release" /p:Platform=x64'''
+					}
+					stage('Build  Config:Debug')
+					{
+						bat '''cd %WORKSPACE%
+						"D:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Professional\\MSBuild\\15.0\\Bin\\MSBuild.exe" .\\CalculatorTest.sln  /t:Build /p:Configuration="Debug" /p:Platform=x64'''
+					}
+					stage('Build Config:Release')
+					{
+						bat '''cd %WORKSPACE%
+						"D:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Professional\\MSBuild\\15.0\\Bin\\MSBuild.exe" .\\CalculatorTest.sln /t:Build /p:Configuration="Release" /p:Platform=x64'''
+					}
+					stage('Copys the assembly files')
+					{
+						bat '''cd %WORKSPACE%
+						md "CalculatorUnitTest\\bin"
+						copy "%CD%\\CalculatorTest\\Debug" "%CD%\\CalculatorUnitTest\\bin"'''
+					}
+					stage('Unit Test')
+					{
+					    bat '''cd %WORKSPACE%
+                        "D:\Program Files (x86)\Microsoft Visual Studio\2017\Professional\Common7\IDE\Extensions\TestPlatform\vstest.console.exe"  .\\CalculatorUnitTest\\bin\\CalculatorTest.dll /logger:trx'''
+					}
+					}	
+					
+				catch (e) 
+				{
+					build_ok = false
+					echo e.toString()
+				}
+				
+				/* Last stage is to send the E-Mail if build failed. Which uses the SendEmailNotification method. */
+            try {
+                stage('CPP Unit Test - E-Mail Notification') {
+                    def build_status = "UNKNOWN"
+                    def send_email = false
+                    if (build_ok) {
+                        build_status = "SUCCESS"
+                        /* We send build back to normal email if current result is success and previous build failed*/
+                        def previousResult = currentBuild.getPreviousBuild()?.result
+                        if (previousResult != build_status) {
+                            send_email = true;
+                        }
+                    } else {
+                        build_status = "FAILURE"
+                        send_email = true;
+                    }
+
+                    currentBuild.result = build_status
+
+                    if (send_email) {
+                        emailext(body: 'Build URL: $BUILD_URL <br> Project: $PROJECT_NAME <br>  Date of build: ${BUILD_TIMESTAMP}  <br><br> <p style="background-color:blue;">CHANGES</p> <br> <pre>${CHANGES}</pre> <br><br> -------------------------------------------------- <br> <p style="background-color:blue;">CONSOLE OUTPUT</p> <pre>${BUILD_LOG, maxLines=100, escapeHtml=false}</pre>',
+                                 mimeType: 'text/html',
+                                 subject: '$PROJECT_NAME - Build # $BUILD_NUMBER - $BUILD_STATUS!',
+                                 to: 'shenhanlin@triomotion.com'
+                                 recipientProviders: [[$class: 'CulpritsRecipientProvider'], [$class: 'RequesterRecipientProvider']])
+                    }
+                }
+            } catch (e) {
+                echo e.toString()
+            }
+		 }
+		
+		}
+	}
+}
